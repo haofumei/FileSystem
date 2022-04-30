@@ -1,7 +1,5 @@
 package ds;
 
-import javax.print.DocFlavor;
-
 public class Directory extends Sector {
 
     int free; // Block number of first unused block, only used in block 0.

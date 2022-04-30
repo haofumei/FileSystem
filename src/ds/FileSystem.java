@@ -1,7 +1,5 @@
 package ds;
 import exceptions.*;
-
-
 import java.io.*;
 import java.util.LinkedList;
 import java.util.Queue;
@@ -10,10 +8,10 @@ import java.util.Scanner;
 public class FileSystem {
 
     public class OpenMode {
-        public char mode;
-        public int pointer;
-        public int index;
-        public int parentIndex;
+        public char mode; // Mode: input, output, update
+        public int pointer; // File pointer
+        public int index; // Block of cur data file
+        public int parentIndex; // Block of parent dir
         public String fileName;
     }
 
@@ -86,15 +84,19 @@ public class FileSystem {
          * Parameter: full file name(path + target)
          * Return: void
          */
-        LinkedList<String> paths = parseFileName(fileName);
-        String createdFile = paths.removeLast();
-        goToDirectory(paths);
 
-        Directory curDir = ((Directory) disk[pathStack.peek()]);
+        String createdFile = getTargetFile(fileName);
+
+        // Target the forward of curDir
+        int block = goToForward(createdFile);
+        Directory curDir = ((Directory) disk[block]);
         SubDir subDir = curDir.getSubDirByName(createdFile);
 
         int index;
         if (subDir == null) {
+            if (curDir.getFiller() == 31) { // Create a new forward dir
+                curDir = (Directory) createForward(curDir, block);
+            }
             index = getAndUpdateFreeBlock(); // Update the free block
             curDir.addSubDir(new SubDir('U', createdFile, index, 0));
         } else { // Recreate
@@ -104,6 +106,7 @@ public class FileSystem {
         }
         disk[index] = new ds.File(0, 0);
         pathStack.push(index);
+        setOpenMode('O', 0, index, block, createdFile);
     }
 
     private void createDirectory(String fileName) {
@@ -113,26 +116,21 @@ public class FileSystem {
          * Parameter: full file name(path + target)
          * Return: void
          */
-        LinkedList<String> paths = parseFileName(fileName);
-        String createdFile = paths.removeLast();
-        goToDirectory(paths);
 
-        int block = pathStack.peek();
+        String createdFile = getTargetFile(fileName);
+
+        // Target the forward of curDir
+        int block = goToForward(createdFile);
         Directory curDir = ((Directory) disk[block]);
         SubDir subDir = curDir.getSubDirByName(createdFile);
-        while (subDir == null && curDir.forward != 0) {
-            curDir = ((Directory) disk[curDir.forward]);
-            subDir = curDir.getSubDirByName(createdFile);
-            block = curDir.forward;
-        }
+
         int index;
         if (subDir == null) {
             if (curDir.getFiller() == 31) { // Create a new forward dir
                 curDir = (Directory) createForward(curDir, block);
             }
             index = getAndUpdateFreeBlock(); // Update the free block
-            subDir = new SubDir('D', createdFile, index, 0);
-            curDir.addSubDir(subDir);
+            curDir.addSubDir(new SubDir('D', createdFile, index, 0));
         } else { // Recreate
             index = subDir.getLink();
             deleteSuccessor(index); // Delete the related directories
@@ -140,6 +138,25 @@ public class FileSystem {
         }
         disk[index] = new Directory(0 , 0);
         pathStack.push(index);
+    }
+
+    private String getTargetFile(String path) {
+        LinkedList<String> paths = parseFileName(path);
+        String createdFile = paths.removeLast();
+        goToDirectory(paths);
+        return createdFile;
+    }
+
+    private int goToForward(String createdFile) {
+        int block = pathStack.peek(); // Block of curDir
+        Directory curDir = ((Directory) disk[block]);
+        SubDir subDir = curDir.getSubDirByName(createdFile);
+        while (subDir == null && curDir.forward != 0) {
+            block = curDir.forward;
+            curDir = ((Directory) disk[block]);
+            subDir = curDir.getSubDirByName(createdFile);
+        }
+        return block;
     }
 
     private Sector createForward(Sector curSec, int index) {
@@ -154,14 +171,21 @@ public class FileSystem {
     }
 
     public void delete(String fileName) {
-        LinkedList<String> paths = parseFileName(fileName);
-        String deletedFile = paths.removeLast();
-        goToDirectory(paths);
+        String deletedFile = getTargetFile(fileName);
 
-        Directory curDir = ((Directory) disk[pathStack.peek()]);
+        // Target the forward of curDir
+        int block = goToForward(deletedFile);
+        Directory curDir = ((Directory) disk[block]);
         SubDir target = curDir.deleteSubDirByName(deletedFile);
-        deleteSuccessor(target.getLink());
-
+        if (target == null) {
+            throw new NoSuchFileException("No such file exist: " + fileName);
+        } else {
+            if (curDir.getFiller() == 0 && curDir.getBack() != 0) {
+                disk[curDir.getBack()].setForward(0);
+                disk[block] = null;
+            }
+            deleteSuccessor(target.getLink());
+        }
     }
 
     private void deleteSuccessor(int index) {
@@ -283,27 +307,28 @@ public class FileSystem {
          * Parameter: mode('I', 'O', 'U') and name of file
          * Throw: NoSuchFileException and UnsupportedModeException
          */
-        LinkedList<String> paths = parseFileName(fileName);
-        String openedFile = paths.removeLast();
-        goToDirectory(paths);
+        String openedFile = getTargetFile(fileName);
 
-        Directory curDir = ((Directory) disk[pathStack.peek()]);
+        // Target the forward of curDir
+        int block = goToForward(openedFile);
+        Directory curDir = ((Directory) disk[block]);
         SubDir subDir = curDir.getSubDirByName(openedFile);
+
         if (subDir == null || isDirectory(subDir.getType()))
             throw new NoSuchFileException("No such file or user data exists: " + openedFile);
-        int index = subDir.getLink(), pIndex = pathStack.peek();
+        int index = subDir.getLink();
         pathStack.push(index); // update path stack
         if (isInput(mode)) {
-            setOpenMode('I', 0, index, pIndex, openedFile);
+            setOpenMode('I', 0, index, block, openedFile);
         } else if (isOutput(mode)) {
             int pointer = subDir.getSize();
             while (disk[index].getForward() != 0) {
                 index = disk[index].getForward();
                 pointer += 504;
             }
-            setOpenMode('O', pointer, subDir.getLink(), pIndex, openedFile);
+            setOpenMode('O', pointer, subDir.getLink(), block, openedFile);
         } else if (isUpdate(mode)) {
-            setOpenMode('U', 0, index, pIndex, openedFile);
+            setOpenMode('U', 0, index, block, openedFile);
         } else {
             throw new UnsupportedModeException("unsupported mode: " + mode);
         }
@@ -432,7 +457,6 @@ public class FileSystem {
         try {
             BufferedReader reader = new BufferedReader(new FileReader("output.txt"));
             String line;
-            int count = 0;
             while ((line = reader.readLine()) != null) {
                 String[] data = line.split(" ");
                 if (data[1].equals("D")) {
@@ -454,10 +478,10 @@ public class FileSystem {
                     ((ds.File) disk[index]).writeData(data);
                 }
             }
-            System.out.println(count);
             reader.close();
         } catch (IOException e) {
-            e.printStackTrace();
+            //e.printStackTrace();
+            System.out.println("No data file input.");
         }
     }
 

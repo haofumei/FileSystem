@@ -1,6 +1,5 @@
 package ds;
 
-
 import java.util.Queue;
 
 public class File extends Sector {
