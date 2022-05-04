@@ -1,0 +1,9 @@
+# idea
+.idea
+
+# out directories
+out
+
+# 
+FileSystem.iml
+output.txt
